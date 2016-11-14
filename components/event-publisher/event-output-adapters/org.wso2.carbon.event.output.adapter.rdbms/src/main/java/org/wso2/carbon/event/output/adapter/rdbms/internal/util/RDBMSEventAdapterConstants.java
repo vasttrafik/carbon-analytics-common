@@ -51,6 +51,7 @@ public final class RDBMSEventAdapterConstants {
     public static final String ADAPTER_GENERIC_RDBMS_CREATE_TABLE = "createTable";
     public static final String ADAPTER_GENERIC_RDBMS_INSERT_DATA = "insertDataToTable";
     public static final String ADAPTER_GENERIC_RDBMS_TABLE_EXIST = "isTableExist";
+    public static final String ADAPTER_MSSQL_RDBMS_TABLE_EXIST = "mssql.isTableExist";
     public static final String ADAPTER_GENERIC_RDBMS_EQUAL = "equal";
     public static final String ADAPTER_GENERIC_RDBMS_AND = "and";
     public static final String ADAPTER_GENERIC_RDBMS_UPDATE_TABLE = "updateTableRow";

@@ -51,6 +51,7 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
     private ExecutionInfo executionInfo = null;
     private DataSource dataSource;
     private boolean isUpdate;
+    private String url = "";
 
     public RDBMSEventAdapter(OutputEventAdapterConfiguration eventAdapterConfiguration,
                              Map<String, String> globalProperties) {
@@ -100,6 +101,11 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                                     .ADAPTER_GENERIC_RDBMS_DATASOURCE_NAME));
             dataSource = (DataSource) carbonDataSource.getDSObject();
             con = ((DataSource) carbonDataSource.getDSObject()).getConnection();
+            
+            url = con.getMetaData().getURL();
+            
+            log.debug("Database url: " + url);
+            
         } catch (DataSourceException e) {
             log.error("No data-source found by the name: " + eventAdapterConfiguration.getStaticProperties()
                     .get(RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_DATASOURCE_NAME), e);
@@ -211,9 +217,14 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
         String insertTableRowQuery = constructQuery(tableName, dbTypeMappings.get(RDBMSEventAdapterConstants
                 .ADAPTER_GENERIC_RDBMS_INSERT_DATA), null, columns, valuePositionsBuilder, null, null);
 
-        //Constructing query to check for the table existence
-        String isTableExistQuery = constructQuery(tableName, dbTypeMappings.get(RDBMSEventAdapterConstants
-                .ADAPTER_GENERIC_RDBMS_TABLE_EXIST), null, null, null, null, null);
+        String isTableExistQuery = null;
+        
+        if(url.contains("sqlserver"))
+        	isTableExistQuery = constructQuery(tableName, dbTypeMappings.get("mssql." + RDBMSEventAdapterConstants
+                    .ADAPTER_GENERIC_RDBMS_TABLE_EXIST), null, null, null, null, null);
+        else
+        	isTableExistQuery = constructQuery(tableName, dbTypeMappings.get(RDBMSEventAdapterConstants
+                    .ADAPTER_GENERIC_RDBMS_TABLE_EXIST), null, null, null, null, null);
 
         executionInfo.setPreparedInsertStatement(insertTableRowQuery);
         executionInfo.setPreparedCreateTableStatement(createTableQuery);
@@ -342,49 +353,56 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
         }
     }
 
-    /**
-     * Populating column values to table Insert query
-     */
-    private void populateStatement(Map<String, Object> map, PreparedStatement stmt, List<Attribute> colOrder)
-            throws OutputEventAdapterException {
-        Attribute attribute = null;
+	/**
+	 * Populating column values to table Insert query
+	 */
+	private void populateStatement(Map<String, Object> map, PreparedStatement stmt, List<Attribute> colOrder)
+			throws OutputEventAdapterException {
+		Attribute attribute = null;
 
-        try {
-            for (int i = 0; i < colOrder.size(); i++) {
-                attribute = colOrder.get(i);
-                Object value = map.get(attribute.getName());
-                if (value != null) {
-                    switch (attribute.getType()) {
-                        case INT:
-                            stmt.setInt(i + 1, (Integer) value);
-                            break;
-                        case LONG:
-                            stmt.setLong(i + 1, (Long) value);
-                            break;
-                        case FLOAT:
-                            stmt.setFloat(i + 1, (Float) value);
-                            break;
-                        case DOUBLE:
-                            stmt.setDouble(i + 1, (Double) value);
-                            break;
-                        case STRING:
-                            stmt.setString(i + 1, (String) value);
-                            break;
-                        case BOOL:
-                            stmt.setBoolean(i + 1, (Boolean) value);
-                            break;
-                    }
-                } else {
-                    throw new OutputEventAdapterException("Cannot Execute Insert/Update. Null value detected for " +
-                            "attribute" + attribute.getName());
-                }
-            }
-        } catch (SQLException e) {
-            cleanupConnections(stmt, null);
-            throw new OutputEventAdapterException("Cannot set value to attribute name " + attribute.getName() + ". " +
-                    "Hence dropping the event." + e.getMessage(), e);
-        }
-    }
+		try {
+			for (int i = 0; i < colOrder.size(); i++) {
+				attribute = colOrder.get(i);
+				Object value = map.get(attribute.getName());
+				
+				if(value != null && attribute != null && attribute.getType() != null) {
+					switch (attribute.getType()) {
+					case INT:
+						if (value != null)
+							stmt.setInt(i + 1, (Integer) value);
+						break;
+					case LONG:
+						if (value != null)
+							stmt.setLong(i + 1, (Long) value);
+						break;
+					case FLOAT:
+						if (value != null)
+							stmt.setFloat(i + 1, (Float) value);
+						break;
+					case DOUBLE:
+						if (value != null)
+							stmt.setDouble(i + 1, (Double) value);
+						break;
+					case STRING:
+						if (value != null)
+							stmt.setString(i + 1, (String) value);
+						break;
+					case BOOL:
+						if (value != null)
+							stmt.setBoolean(i + 1, (Boolean) value);
+						break;
+					}
+				} else {
+					stmt.setNull(i + 1, java.sql.Types.VARCHAR);
+				}
+				
+			}
+		} catch (SQLException e) {
+			cleanupConnections(stmt, null);
+			throw new OutputEventAdapterException("Cannot set value to attribute name " + attribute.getName() + ". "
+					+ "Hence dropping the event." + e.getMessage(), e);
+		}
+	}
 
     public void createTableIfNotExist(String tableName)
             throws OutputEventAdapterException {
@@ -402,6 +420,9 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                 }
                 stmt = con.createStatement();
                 try {
+                	
+                	log.debug("Check for existence statement: " + executionInfo.getPreparedTableExistenceCheckStatement());
+                	
                     stmt.executeQuery(executionInfo.getPreparedTableExistenceCheckStatement());
                     executionInfo.setTableExist(true);
 
@@ -522,6 +543,7 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_CREATE_TABLE,
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_INSERT_DATA,
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_TABLE_EXIST,
+                RDBMSEventAdapterConstants.ADAPTER_MSSQL_RDBMS_TABLE_EXIST,
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_UPDATE_TABLE,
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_PROPERTY_DATA_TYPE_IN_TABLE,
                 RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_PROPERTY_SELECT_FROM_TABLE,
