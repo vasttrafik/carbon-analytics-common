@@ -22,8 +22,8 @@ package org.wso2.carbon.event.output.adapter.rdbms.internal;
 
 
 import org.wso2.carbon.databridge.commons.Attribute;
+import org.wso2.carbon.event.output.adapter.rdbms.internal.util.RDBMSEventAdapterConstants;
 
-import javax.sql.DataSource;
 import java.util.List;
 
 /**
@@ -40,6 +40,8 @@ public class ExecutionInfo {
     private String preparedTableExistenceCheckStatement;
     private boolean updateMode;
     private boolean tableExist = false;
+    
+    private int batchSize = RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_DEFAULT_SIZE;
 
     public List<Attribute> getInsertQueryColumnOrder() {
         return insertQueryColumnOrder;
@@ -111,5 +113,13 @@ public class ExecutionInfo {
 
     public void setTableExist(boolean tableExist) {
         this.tableExist = tableExist;
+    }
+    
+    public int getBatchSize() {
+    	return batchSize;
+    }
+    
+    public void setBatchSize(int batchSize) {
+    	this.batchSize = batchSize;
     }
 }

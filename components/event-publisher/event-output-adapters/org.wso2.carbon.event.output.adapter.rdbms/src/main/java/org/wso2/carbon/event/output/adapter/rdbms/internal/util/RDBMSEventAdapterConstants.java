@@ -58,9 +58,6 @@ public final class RDBMSEventAdapterConstants {
     public static final String ADAPTER_GENERIC_RDBMS_PROPERTY_DATA_TYPE_IN_TABLE = "selectAllColumnsDataTypeInTable";
     public static final String ADAPTER_GENERIC_RDBMS_PROPERTY_SELECT_FROM_TABLE = "selectFromTable";
 
-
-
-
-
-
+    public static final String ADAPTER_MESSAGE_BATCH_SIZE_NAME = "batchSize";
+    public static final int ADAPTER_MESSAGE_BATCH_DEFAULT_SIZE = 100;
 }
