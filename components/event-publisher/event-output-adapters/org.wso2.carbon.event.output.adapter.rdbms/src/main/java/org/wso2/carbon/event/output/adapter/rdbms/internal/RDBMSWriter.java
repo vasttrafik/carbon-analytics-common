@@ -3,17 +3,13 @@ package org.wso2.carbon.event.output.adapter.rdbms.internal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Statement;
-
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import javax.sql.DataSource;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.databridge.commons.Attribute;
-import org.wso2.carbon.event.output.adapter.core.exception.ConnectionUnavailableException;
 import org.wso2.carbon.event.output.adapter.core.exception.OutputEventAdapterException;
 import org.wso2.carbon.event.output.adapter.rdbms.RDBMSEventAdapter;
 
@@ -21,108 +17,102 @@ public class RDBMSWriter implements Runnable {
 	
 	private static final Log log = LogFactory.getLog(RDBMSWriter.class);
 	
-	private RDBMSEventAdapter adapter;
-	private DataSource dataSource;
-	private ExecutionInfo executionInfo = null;
+	private Connection con = null;
 	
-	public RDBMSWriter(RDBMSEventAdapter adapter) {
-		this.adapter = adapter;
+	private int batchSize = 500;
+	HashMap<String, PreparedStatement> statements;
+	
+	public RDBMSWriter(int batchSize) {
+		this.batchSize = batchSize;
 	}
 	
 	public synchronized void run() {
-		int messagesInQueue = RDBMSEventAdapter.messageQueue.size();
-		
-		if (messagesInQueue != 0) {
-			// Number of messages written to database during run
-			int messagesWritten = 0;
-		
-			if (dataSource == null)
-				dataSource = adapter.getDataSource();
+
+		Map<String, Object> message = null;
+		ExecutionInfo executionInfo = null;
+		statements = new HashMap<String, PreparedStatement>();
+
+		int messages = 0;
+
+		try {
+
+			PreparedStatement stmt = null;
+			con = null;
 			
-			if (dataSource != null) {
+			int queueSize = RDBMSEventAdapter.messageQueue.size();
+			
+			if (log.isDebugEnabled()) {
+				log.debug("Queue now contains: " + queueSize + " messages");
+			}
+			
+			for(int i = 0; i < queueSize; i++) {
+
+				// Take a message from the  queue
+				executionInfo = RDBMSEventAdapter.messageQueue.poll();
+
 				if (executionInfo == null)
-					executionInfo = adapter.getExecutionInfo();
-			
-				if (executionInfo != null) {
-					Connection con = null;
-					PreparedStatement stmt = null;
-				
-					if (log.isDebugEnabled()) {
-						log.debug("RDBMSWriter running...");
-						log.debug("Number of messages in queue: " + messagesInQueue);
-					}
-				
-					try {
-						con = dataSource.getConnection();
-						con.setAutoCommit(false);
-			
-						if (executionInfo.isUpdateMode()) 
-							stmt = con.prepareStatement(executionInfo.getPreparedUpdateStatement());
-						else
-							stmt = con.prepareStatement(executionInfo.getPreparedInsertStatement());
-					
-						int batchSize = executionInfo.getBatchSize();
-						int messages = 0, messagesInTrans  = 0;
-			
-						Map<String, Object> message = null;
-					
-						while (!RDBMSEventAdapter.messageQueue.isEmpty()) {
-							message = RDBMSEventAdapter.messageQueue.poll();
-						
-							if (message == null)
-								break;
-						
-							messages++;
-						
-							if (executionInfo.isUpdateMode()) 
-								populateStatement(message, stmt, executionInfo.getUpdateQueryColumnOrder());
-							else
-								populateStatement(message, stmt, executionInfo.getInsertQueryColumnOrder());
-				 
-							stmt.addBatch();
-						
-							if (messages % batchSize == 0) {
-								// Execute batch
-								executeBatch(stmt);
-								// Update counters
-								messagesWritten += batchSize;
-								messagesInTrans += batchSize;
-							
-								// If we have reached the maximum size of a transaction, commit the transaction
-								if (messagesInTrans >= 2000) {
-									con.commit();
-									// Reset counter
-									messagesInTrans = 0;
-								}
-							
-								// Reset number of messages in batch
-								messages = 0;
-							}
-						}
-			 
-						// If there are any messages left, execute a new batch
-						if (messages > 0) {
-							executeBatch(stmt);
-							messagesWritten += messages;
-						}
-			 
-						// Commit the transaction
-						con.commit();
-					}
-					catch (Exception e) {
-						log.error("Error publishing data to RDBMS:" + e.getMessage());
-					}
-					finally {
-						cleanupConnections(stmt, con);
-					}
+					break;
+
+				if (con == null) {
+					con = RDBMSEventAdapter.dataSource.getConnection();
+					con.setAutoCommit(false);
 				}
-			
-				if (log.isDebugEnabled()) {
-					log.debug("RDBMSWriter done...");
-					log.debug("Number of messages written:" + messagesWritten);
-					log.debug("Number of messages in queue: " + RDBMSEventAdapter.messageQueue.size());
+
+				if (executionInfo.isUpdateMode()) {
+
+					if (statements.containsKey(executionInfo.getPreparedUpdateStatement())) {
+						stmt = statements.get(executionInfo.getPreparedUpdateStatement());
+					} else {
+						PreparedStatement stmnt = con.prepareStatement(executionInfo.getPreparedUpdateStatement());
+						statements.put(executionInfo.getPreparedUpdateStatement(), stmnt);
+						stmt = stmnt;
+					}
+
+				} else {
+
+					if (statements.containsKey(executionInfo.getPreparedInsertStatement())) {
+						stmt = statements.get(executionInfo.getPreparedInsertStatement());
+					} else {
+						PreparedStatement stmnt = con.prepareStatement(executionInfo.getPreparedInsertStatement());
+						statements.put(executionInfo.getPreparedInsertStatement(), stmnt);
+						stmt = stmnt;
+					}
+
+				}
+
+				message = executionInfo.getMessage();
+				messages++;
+
+				if (executionInfo.isUpdateMode())
+					populateStatement(message, stmt, executionInfo.getUpdateQueryColumnOrder());
+				else
+					populateStatement(message, stmt, executionInfo.getInsertQueryColumnOrder());
+
+				stmt.addBatch();
+
+				if (messages % batchSize == 0 || RDBMSEventAdapter.messageQueue.size() == 0) {
+					// Execute batch
+
+					for (PreparedStatement stmnt : statements.values()) {
+						executeBatch(stmnt);
+					}
+					con.commit();
+
+					if (log.isDebugEnabled()) {
+						log.debug("Commited batch. Wrote " + messages + " statements to database");
+					}
+
+					// Reset number of messages
+					messages = 0;
 				}
 			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+			log.error("Error publishing data to RDBMS:" + e.getMessage());
+			cleanupConnections();
+		} finally {
+			cleanupConnections();
 		}
 	}
 	
@@ -188,25 +178,29 @@ public class RDBMSWriter implements Runnable {
 				
 			}
 		} catch (SQLException e) {
-			cleanupConnections(stmt, null);
+			cleanupConnections();
 			throw new OutputEventAdapterException("Cannot set value to attribute name " + attribute.getName() + ". "
 					+ "Hence dropping the event." + e.getMessage(), e);
 		}
 	}
 	
-	private void cleanupConnections(Statement stmt, Connection connection) {
-        if (stmt != null) {
+	private void cleanupConnections() {
+		
+		if(statements != null) {
+			for(PreparedStatement stmnt : statements.values()) {
+				try {
+					stmnt.close();
+				} catch (SQLException e) {
+					log.error("Unable to close statement." + e.getMessage(), e);
+				}
+			}
+		}
+
+        if (con != null) {
             try {
-                stmt.close();
+                con.close();
             } catch (SQLException e) {
-                log.error("unable to close statement." + e.getMessage(), e);
-            }
-        }
-        if (connection != null) {
-            try {
-                connection.close();
-            } catch (SQLException e) {
-                log.error("unable to close connection." + e.getMessage(), e);
+                log.error("Unable to close connection." + e.getMessage(), e);
             }
         }
     }

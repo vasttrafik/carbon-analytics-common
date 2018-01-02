@@ -54,24 +54,15 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
     private Map<String, String> globalProperties;
     private ResourceBundle resourceBundle;
     private Map<String, String> dbTypeMappings;
-    private ExecutionInfo executionInfo = null;
-    private DataSource dataSource;
     private String url = "";
     
-    public static ConcurrentLinkedQueue<Map<String, Object>> messageQueue = new ConcurrentLinkedQueue<Map<String, Object>>();
+    public static ConcurrentLinkedQueue<ExecutionInfo> messageQueue = new ConcurrentLinkedQueue<ExecutionInfo>();
+    public static DataSource dataSource;
     private static ScheduledFuture<?> rdbmsWriter;
 
     public RDBMSEventAdapter(OutputEventAdapterConfiguration eventAdapterConfiguration, Map<String, String> globalProperties) {
         this.eventAdapterConfiguration = eventAdapterConfiguration;
         this.globalProperties = globalProperties;
-    }
-    
-    public DataSource getDataSource() {
-    	return dataSource;
-    }
-    
-    public ExecutionInfo getExecutionInfo() {
-    	return executionInfo;
     }
 
     @Override
@@ -81,6 +72,29 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                 .getBundle("org.wso2.carbon.event.output.adapter.rdbms.i18n.Resources", Locale.getDefault());
         
         populateDbMappings();
+        
+        int batchSize;
+
+        if (globalProperties.get(RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_SIZE_NAME) != null) {
+        	batchSize = Integer
+                    .parseInt(globalProperties.get(RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_SIZE_NAME));
+        } else {
+        	batchSize = RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_DEFAULT_SIZE;
+        }
+        
+        ThreadFactory threadFactory = new ThreadFactory() {
+            public Thread newThread(Runnable runnable) {
+              Thread th = new Thread(runnable);
+              return th;
+            }
+          };
+        
+          if(rdbmsWriter == null) {
+        	  rdbmsWriter = Executors.newSingleThreadScheduledExecutor(threadFactory).scheduleAtFixedRate(new RDBMSWriter(batchSize), 1L, 5L, TimeUnit.SECONDS);
+        	  log.info("RDBMSEventAdapter initialized");
+          } else {
+        	  log.info("Already initiated rdbms writer");
+          }
     }
 
     @Override
@@ -140,7 +154,8 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
 
     }
 
-    @Override
+    @SuppressWarnings("unchecked")
+	@Override
     public void publish(Object message, Map<String, String> dynamicProperties) {
 
         String tableName;
@@ -154,53 +169,28 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                 String updateColumnKeys = eventAdapterConfiguration.getStaticProperties().get(RDBMSEventAdapterConstants
                         .ADAPTER_GENERIC_RDBMS_UPDATE_KEYS);
 
-                if (executionInfo == null) {
-                    executionInfo = new ExecutionInfo();
-                    initializeDatabaseExecutionInfo(tableName, executionMode, updateColumnKeys, message);
-                    initializeWriter();
-                    createTableIfNotExist(tableName);
-                }
+                ExecutionInfo executionInfo = initializeDatabaseExecutionInfo(tableName, executionMode, updateColumnKeys, message);
+                executionInfo.setMessage((Map<String, Object>)message);
                 
-                Map<String, Object> rdbmsMessage = (Map<String, Object>)message;
-                messageQueue.add(rdbmsMessage);
+                RDBMSEventAdapter.messageQueue.add(executionInfo);
             } else {
                 throw new OutputEventAdapterRuntimeException(
                         message.getClass().toString() + "is not a compatible type. Hence Event is dropped.");
             }
         } 
-        catch (OutputEventAdapterException e) {
+        catch (Exception e) {
             log.error(e.getMessage() + " Hence Event is dropped.", e);
-        }
-    }
-    
-    private void initializeWriter() {
-    	 // Create pool of rdbms writers
-        if (rdbmsWriter == null) {
-            int batchSize;
-
-            if (globalProperties.get(RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_SIZE_NAME) != null) {
-            	batchSize = Integer
-                        .parseInt(globalProperties.get(RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_SIZE_NAME));
-            } else {
-            	batchSize = RDBMSEventAdapterConstants.ADAPTER_MESSAGE_BATCH_DEFAULT_SIZE;
-            }
-            
-            ThreadFactory threadFactory = new ThreadFactory() {
-                public Thread newThread(Runnable runnable) {
-                  Thread th = new Thread(runnable);
-                  return th;
-                }
-              };
-              
-            rdbmsWriter = Executors.newSingleThreadScheduledExecutor(threadFactory).scheduleAtFixedRate(new RDBMSWriter(this), 1L, 1L, TimeUnit.SECONDS);
         }
     }
 
     /**
      * Construct all the queries and assign to executionInfo instance
      */
-    private void initializeDatabaseExecutionInfo(String tableName, String executionMode, String updateColumnKeys, Object message) {
+    @SuppressWarnings("unchecked")
+	private ExecutionInfo initializeDatabaseExecutionInfo(String tableName, String executionMode, String updateColumnKeys, Object message) {
 
+    	ExecutionInfo executionInfo = new ExecutionInfo();
+    	
         if (resourceBundle.getString(RDBMSEventAdapterConstants.ADAPTER_GENERIC_RDBMS_EXECUTION_MODE_UPDATE)
                 .equalsIgnoreCase(executionMode)) {
             //isUpdate = true;
@@ -358,6 +348,8 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
                     .ADAPTER_GENERIC_RDBMS_UPDATE_TABLE), null, null, null, columnValues, condition);
             executionInfo.setPreparedUpdateStatement(tableUpdateRowQuery);
         }
+        
+        return executionInfo;
 
     }
     
@@ -365,7 +357,7 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
    
 
 	
-
+/*
     public void createTableIfNotExist(String tableName) throws OutputEventAdapterException {
 
         if (!executionInfo.isTableExist()) {
@@ -418,6 +410,7 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
             }
         }
     }
+    */
 
     private void cleanupConnections(Statement stmt, Connection connection) {
         if (stmt != null) {
@@ -579,19 +572,15 @@ public class RDBMSEventAdapter implements OutputEventAdapter {
         if (dataSource != null) {
             dataSource = null;
         }
-        
-        if (executionInfo != null) {
-            executionInfo.setTableExist(false);
-        }
     }
 
     @Override
     public void destroy() {
-
-        if (executionInfo != null) {
-            executionInfo = null;
-        }
         
+    	if(rdbmsWriter != null) {
+    		rdbmsWriter.cancel(false);
+    	}
+    	
         if (dataSource != null) {
             dataSource = null;
         }
